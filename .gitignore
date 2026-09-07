@@ -14,3 +14,57 @@ modules/[Aa][Hh][Kk]_[Tt]ests
 .vs
 .vscode
 sdk/tools/winesync/winesync.cfg
+
+# Privacy and security
+.env
+*.env
+*.env.local
+*.env.*.local
+.env.development
+.env.test
+.env.production
+
+# Certificates and keys
+*.pem
+*.key
+*.crt
+*.cer
+*.pfx
+*.p12
+*.jks
+*.keystore
+
+# Passwords and secrets
+*.pwd
+*.pass
+*.secret
+*.token
+*.api_key
+*.private_key
+
+# Temporary and cache files
+*.tmp
+*.swp
+*.swo
+*~
+.*.un~
+
+# Logs and databases
+*.log
+*.sqlite
+*.db
+*.sqlite3
+
+# IDE specific
+.idea/workspace.xml
+.idea/tasks.xml
+.vscode/workspace.state
+.vscode/argv.json
+
+# OS specific
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.tmp
+*.temp
