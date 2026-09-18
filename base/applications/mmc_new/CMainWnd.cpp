@@ -9,12 +9,26 @@
 
 #include "precomp.h"
 
+static TBBUTTON TbButtons[] =
+{
+    { BTN_UNDO, IDM_TB_UNDO, 0, BTNS_BUTTON, {0}, 0, 0 },
+    { BTN_REDO, IDM_TB_REDO, 0, BTNS_BUTTON, {0}, 0, 0 },
+    { 4, IDC_STATIC, TBSTATE_ENABLED, BTNS_SEP, {0}, 0, 0 },
+    { BTN_UP, IDM_TB_UP, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, 0 },
+    { BTN_SCOPE_PANE, IDM_TB_SCOPE_PANE, TBSTATE_ENABLED | TBSTATE_CHECKED, BTNS_CHECK, {0}, 0, 0 },
+    { 4, IDC_STATIC, TBSTATE_ENABLED, BTNS_SEP, {0}, 0, 0 },
+//    { BTN_EXPORT_LIST, IDM_TB_EXPORT_LIST, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, 0 },
+    { 4, IDC_STATIC, TBSTATE_ENABLED, BTNS_SEP, {0}, 0, 0 },
+//    { BTN_HELP, IDM_TB_HELP, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, 0 },
+    { BTN_ACTIONS_PANE, IDM_TB_ACTIONS_PANE, TBSTATE_ENABLED, BTNS_CHECK, {0}, 0, 0 }
+};
+
 CMainWnd::CMainWnd()
-    : m_NewConsoleCount(0)
-    , m_nConsoleCount(0)
-    , m_AppAuthorMode(false)
-    , m_hSnapinImageList(NULL)
+    : m_nConsoleNumber(0)
+    , m_ConsoleMode(AuthorMode)
+    , m_bToolBarVisible(true)
     , m_NextViewId(1)
+    , m_RootNode(NULL)
 {
     m_FrameThunk.Init(XDefFrameProc, this);
     m_pfnSuperWindowProc = m_FrameThunk.GetWNDPROC();
@@ -26,6 +40,19 @@ CMainWnd::CMainWnd()
                                           ILC_MASK | ILC_COLOR32,
                                           0,
                                           4);
+
+    m_hToolBarImageList = ImageList_Create(GetSystemMetrics(SM_CXSMICON),
+                                           GetSystemMetrics(SM_CYSMICON),
+                                           ILC_MASK | ILC_COLOR32,
+                                           0,
+                                           4);
+
+    HBITMAP hToolBarBitmap = LoadBitmapW(_AtlBaseModule.GetModuleInstance(), MAKEINTRESOURCE(IDB_TOOLBAR));
+    ImageList_AddMasked(m_hToolBarImageList,
+                        hToolBarBitmap,
+                        RGB(0,0,0));
+    DeleteObject(hToolBarBitmap);
+
     LoadSnapinCache();
 }
 
@@ -34,6 +61,7 @@ CMainWnd::~CMainWnd()
     DestroyMenu(m_hMenuConsoleSmall);
     DestroyMenu(m_hMenuConsoleLarge);
     ImageList_Destroy(m_hSnapinImageList);
+    ImageList_Destroy(m_hToolBarImageList);
     ::CoUninitialize();
 }
 
@@ -42,21 +70,36 @@ CMainWnd::OnCreate(UINT nMessage, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
 {
     CLIENTCREATESTRUCT ccs;
     LPCTSTR lpFileName = (LPCTSTR)(((LPCREATESTRUCT)lParam)->lpCreateParams);
-    m_AppAuthorMode = TRUE;
-    UpdateMenu();
-    SetWindowText(TEXT("ReactOS Management Console"));
-    ccs.hWindowMenu = GetSubMenu(m_hMenuConsoleLarge, 1);
-    ccs.idFirstChild = IDM_MDI_FIRSTCHILD;
     RECT rect;
+
+    m_bStandardMenusVisible = TRUE;
+
+    /* Create and initialize the Toolbar */
+    m_bToolBarVisible = TRUE;
+    m_ToolBar.Create(m_hWnd,
+                     WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | TBSTYLE_FLAT,
+                     0);
+
+    m_ToolBar.SendMessageW(TB_SETBITMAPSIZE, 0, MAKELONG(16, 16));
+    m_ToolBar.SendMessageW(TB_BUTTONSTRUCTSIZE, sizeof(TBBUTTON), 0);
+
+    m_ToolBar.SetImageList(m_hToolBarImageList);
+    m_ToolBar.SendMessageW(TB_ADDBUTTONSW, _countof(TbButtons), (LPARAM)TbButtons);
+
+    m_ToolBar.GetClientRect(&rect);
+    m_iToolBarHeight = rect.bottom - rect.top;
+
     GetClientRect(&rect);
+    rect.top += m_iToolBarHeight;
+
     /* Create the MDI client window */
+    ccs.hWindowMenu = GetSubMenu(m_hMenuConsoleLarge, 4);
+    ccs.idFirstChild = IDM_MDI_FIRSTCHILD;
+
     m_MDIClient.Create(L"MDICLIENT", m_hWnd, rect, (LPCTSTR)NULL, WS_CHILD | WS_CLIPCHILDREN | WS_VSCROLL | WS_HSCROLL, WS_EX_CLIENTEDGE, 0U, &ccs);
-    //hwndMDIClient = CreateWindowEx(WS_EX_CLIENTEDGE, L"MDICLIENT", (LPCTSTR)NULL,
-    //    ,
-    //    rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
-    //    m_hWnd, NULL, _AtlBaseModule.GetModuleInstance(), (LPVOID)&ccs);
     m_MDIClient.ShowWindow(SW_SHOW);
     m_MDIClient.UpdateWindow();
+
     if (lpFileName == NULL)
     {
         PostMessage(WM_COMMAND, IDM_FILE_NEW, NULL);
@@ -65,13 +108,72 @@ CMainWnd::OnCreate(UINT nMessage, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
 }
 
 LRESULT
-CMainWnd::OnNewMDIChild(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled)
+CMainWnd::OnSize(UINT nMessage, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+    UpdateLayout();
+    return 0;
+}
+
+LRESULT
+CMainWnd::OnCloseChild(UINT nMessage, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+    UpdateTitle();
+    UpdateMenu();
+    return 0;
+}
+
+LRESULT
+CMainWnd::OnDestroy(UINT nMessage, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+    PostQuitMessage(0);
+    SetMenu(NULL);
+    return 0;
+}
+
+LRESULT
+CMainWnd::OnClose(UINT nMessage, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+    DestroyWindow();
+    return 0;
+}
+
+LRESULT
+CMainWnd::OnFileNew(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled)
 {
     MDICREATESTRUCT mcs;
     HWND hChild;
-    CAtlString title;
-    CreateNewConsoleTitle(title);
-    mcs.szTitle = title.GetString();
+    CAtlString rootName(MAKEINTRESOURCE(IDS_CONSOLEROOT));
+//    CAtlString nodeGuid(L"{C96401CC-0E17-11D3-885B-00C04F72C717}");
+
+    /* Close all views */
+    POSITION pos = m_ViewList.GetHeadPosition();
+    while (pos)
+    {
+        CConsoleWnd *console = (CConsoleWnd*)m_ViewList.GetNext(pos);
+        console->SendMessage(WM_CLOSE, 0, 0);
+    }
+
+    /* Delete the snapin tree */
+    delete m_RootNode;
+    m_RootNode = NULL;
+
+    /* Create a new snapin root node */
+    CSnapinCacheEntry *CacheEntry = GetSnapinCacheEntryByGuid((PWSTR)L"{C96401CC-0E17-11D3-885B-00C04F72C717}");
+    if (!CacheEntry)
+    {
+        DPRINT1("No folder cache entry!\n");
+        return 0;
+    }
+
+    m_RootNode = new CSnapin(CacheEntry, rootName.GetString());
+    if (!CacheEntry)
+    {
+        DPRINT1("No root folder!\n");
+        return 0;
+    }
+
+    /* Create a new view */
+    mcs.szTitle = rootName.GetString();
     mcs.szClass = CConsoleWnd::GetWndClassName();
     mcs.hOwner = _AtlBaseModule.GetModuleInstance();
     mcs.x = mcs.cx = CW_USEDEFAULT;
@@ -81,18 +183,23 @@ CMainWnd::OnNewMDIChild(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled
     HWND hWndOld = (HWND)m_MDIClient.SendMessage(WM_MDIGETACTIVE, 0, (LPARAM)&bMaximized);
     mcs.lParam = bMaximized || !hWndOld;
     /* This object registers itself in the _AtlWinModule to be assigned to the next window created */
-    CConsoleWnd* child = new CConsoleWnd(this);
+    CConsoleWnd* child = new CConsoleWnd(this, m_RootNode);
     /* Ask for a new MDI Child window */
     hChild = (HWND)m_MDIClient.SendMessage(WM_MDICREATE, 0, (LONG_PTR)&mcs);
     if (hChild)
     {
-        m_nConsoleCount++;
+        m_nConsoleNumber++;
     }
     else
     {
         delete child;
+        delete m_RootNode;
+        m_RootNode = NULL;
     }
+
+    UpdateTitle();
     UpdateMenu();
+
     return 1;
 }
 
@@ -157,6 +264,17 @@ CMainWnd::OnFileAdd(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled)
 }
 
 LRESULT
+CMainWnd::OnFileOptions(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled)
+{
+    CConsoleWnd* child = GetActiveChildInfo();
+    if (child == NULL)
+        return 0;
+    COptionsDialog dlg(this, child);
+    dlg.DoModal(m_hWnd, (LPARAM)child);
+    return 0;
+}
+
+LRESULT
 CMainWnd::OnFileExit(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled)
 {
     PostMessage(WM_CLOSE, 0, 0);
@@ -164,7 +282,68 @@ CMainWnd::OnFileExit(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled)
 }
 
 LRESULT
-CMainWnd::OnHelpAbout(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled)
+CMainWnd::OnViewCustomize(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled)
+{
+    CConsoleWnd* child = GetActiveChildInfo();
+    if (child == NULL)
+        return 0;
+
+    CCustomizeDialog dlg2(this, child);
+    dlg2.DoModal(m_hWnd, (LPARAM)child);
+    return 0;
+}
+
+LRESULT
+CMainWnd::OnWindowsNew(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled)
+{
+    MDICREATESTRUCT mcs;
+    HWND hChild;
+
+    mcs.szTitle = m_RootNode->DisplayName().GetString();
+    mcs.szClass = CConsoleWnd::GetWndClassName();
+    mcs.hOwner = _AtlBaseModule.GetModuleInstance();
+    mcs.x = mcs.cx = CW_USEDEFAULT;
+    mcs.y = mcs.cy = CW_USEDEFAULT;
+    mcs.style = MDIS_ALLCHILDSTYLES;
+    BOOL bMaximized = FALSE;
+    HWND hWndOld = (HWND)m_MDIClient.SendMessage(WM_MDIGETACTIVE, 0, (LPARAM)&bMaximized);
+    mcs.lParam = bMaximized || !hWndOld;
+    /* This object registers itself in the _AtlWinModule to be assigned to the next window created */
+    CConsoleWnd* child = new CConsoleWnd(this, m_RootNode);
+    /* Ask for a new MDI Child window */
+    hChild = (HWND)m_MDIClient.SendMessage(WM_MDICREATE, 0, (LONG_PTR)&mcs);
+    if (!hChild)
+    {
+        delete child;
+    }
+
+    UpdateMenu();
+    return 0;
+}
+
+LRESULT
+CMainWnd::OnWindowsCascade(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled)
+{
+    m_MDIClient.SendMessage(WM_MDICASCADE, 0, 0);
+    return 0;
+}
+
+LRESULT
+CMainWnd::OnWindowsTile(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled)
+{
+    m_MDIClient.SendMessage(WM_MDITILE, MDITILE_HORIZONTAL, 0);
+    return 0;
+}
+
+LRESULT
+CMainWnd::OnWindowsArrange(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled)
+{
+    m_MDIClient.SendMessage(WM_MDIICONARRANGE, 0, 0);
+    return 0;
+}
+
+LRESULT
+CMainWnd::OnHelpAboutMMC(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled)
 {
     HICON hIcon = LoadIcon(_AtlBaseModule.GetModuleInstance(), MAKEINTRESOURCE(IDI_MAINAPP));
     CAtlString AboutTitle(MAKEINTRESOURCE(IDS_ABOUTTITLE));
@@ -181,6 +360,28 @@ CMainWnd::OnHelpAbout(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled)
 }
 
 LRESULT
+CMainWnd::OnToolbarScopePane(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled)
+{
+    CConsoleWnd* child = GetActiveChildInfo();
+    if (child == NULL)
+        return 0;
+
+    child->SetTreeViewVisible(!child->IsTreeViewVisible());
+    return 0;
+}
+
+LRESULT
+CMainWnd::OnToolbarActionsPane(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled)
+{
+    CConsoleWnd* child = GetActiveChildInfo();
+    if (child == NULL)
+        return 0;
+
+    child->SetActionsPaneVisible(!child->IsActionsPaneVisible());
+    return 0;
+}
+
+LRESULT
 CMainWnd::OnMDIForward(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled)
 {
     HWND hChild = (HWND)m_MDIClient.SendMessage(WM_MDIGETACTIVE, 0, 0);
@@ -193,36 +394,42 @@ CMainWnd::OnMDIForward(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled)
     return 0;
 }
 
-LRESULT
-CMainWnd::OnSize(UINT nMessage, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+CAtlString *CMainWnd::GetConsoleTitle()
 {
-    RECT rcClient;
-    GetClientRect(&rcClient);
-    m_MDIClient.SetWindowPos(NULL, 0, 0, rcClient.right, rcClient.bottom, SWP_NOZORDER);
-    return 0;
+    return &m_ConsoleTitle;
 }
 
-LRESULT
-CMainWnd::OnCloseChild(UINT nMessage, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+void CMainWnd::SetConsoleTitle(CAtlString consoleTitle)
 {
-    m_nConsoleCount--;
-    UpdateMenu();
-    return 0;
+    m_ConsoleTitle = consoleTitle;
+    SetWindowTextW(consoleTitle.GetString());
 }
 
-LRESULT
-CMainWnd::OnDestroy(UINT nMessage, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+BOOL
+CMainWnd::IsToolBarVisible()
 {
-    PostQuitMessage(0);
-    SetMenu(NULL);
-    return 0;
+    return m_bToolBarVisible;
 }
 
-LRESULT
-CMainWnd::OnClose(UINT nMessage, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+VOID
+CMainWnd::SetToolBarVisible(BOOL bVisible)
 {
-    DestroyWindow();
-    return 0;
+    m_bToolBarVisible = bVisible;
+    UpdateLayout();
+}
+
+BOOL
+CMainWnd::AreStandardMenusVisible()
+{
+    return m_bStandardMenusVisible;
+}
+
+VOID
+CMainWnd::SetStandardMenusVisible(BOOL bVisible)
+{
+    m_bStandardMenusVisible = bVisible;
+//        m_MainWnd->UpdateMenu(m_bStandardMenusVisible);
+//    UpdateLayout();
 }
 
 LRESULT
@@ -301,11 +508,49 @@ CMainWnd::UpdateViews()
     POSITION pos;
 
     pos = m_ViewList.GetHeadPosition();
-    do
+    while (pos)
     {
         console = (CConsoleWnd*)m_ViewList.GetNext(pos);
         if (console)
             console->UpdateView();
 
-    } while (pos != NULL);   
+    }
+}
+
+void
+CMainWnd::UpdateLayout()
+{
+    RECT rcClient, rcToolBar = {0, 0, 0, 0};
+    GetClientRect(&rcClient);
+
+    int nToolBarFlags = SWP_NOZORDER;
+    if (m_bToolBarVisible)
+    {
+        rcClient.top += m_iToolBarHeight;
+        rcClient.bottom -= m_iToolBarHeight;
+
+        rcToolBar.right = rcClient.right;
+        rcToolBar.bottom = m_iToolBarHeight;
+        nToolBarFlags |= SWP_SHOWWINDOW;
+    }
+    else
+    {
+        nToolBarFlags |= SWP_HIDEWINDOW;
+    }
+
+    m_ToolBar.SetWindowPos(NULL, rcToolBar.left, rcToolBar.top, rcToolBar.right, rcToolBar.bottom, nToolBarFlags);
+
+    m_MDIClient.SetWindowPos(NULL, rcClient.left, rcClient.top, rcClient.right, rcClient.bottom, SWP_NOZORDER);
+}
+
+CONSOLE_MODE
+CMainWnd::GetConsoleMode()
+{
+    return m_ConsoleMode;
+}
+
+void
+CMainWnd::SetConsoleMode(CONSOLE_MODE ConsoleMode)
+{
+    m_ConsoleMode = ConsoleMode;
 }
