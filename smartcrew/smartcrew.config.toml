@@ -1,0 +1,235 @@
+# ============================================================================
+#  SMARTCREW DEEPSEEK HARNESS — Configuration
+#  ----------------------------------------------------------------------------
+#  الفكرة الجوهرية (Core Idea):
+#  الذاكرة المعرفية (Knowledge Memory) منفصلة تماماً عن النموذج (Model).
+#  يمكنك التبديل بين أي نموذج (DeepSeek / Claude / OpenAI / Ollama محلي)
+#  دون أن يفقد النظام الأساس المعرفي الذي تستند إليه قراراته.
+#
+#  The knowledge memory is fully decoupled from the model. You can switch
+#  between any model without losing the knowledge base that decisions rely on.
+#
+#  License: MIT  |  Status: Developer Preview  |  Read SAFETY.md first.
+# ============================================================================
+
+[harness]
+name = "SMARTCREW DEEPSEEK HARNESS"
+version = "0.1.0"
+# architecture inspired by Cordis: Agent Loop + Memory + Tools + Model
+architecture = "cordis"
+# Everything is a Plugin
+plugins_dir = "./plugins"
+
+# ---------------------------------------------------------------------------
+#  [runtime] — أنماط العمل الأربعة (The Four Modes)
+# ---------------------------------------------------------------------------
+[runtime]
+# standard | ptc | minimal | creator
+mode = "standard"
+web_port = 3080
+web_host = "0.0.0.0"          # bind to 0.0.0.0 so remote/preview access works
+local_only = true             # لا تغادر البيانات الجهاز افتراضياً
+log_level = "info"
+
+  [runtime.modes.standard]
+  description = "وكيل البرمجة الكامل والافتراضي — full default coding agent"
+  tools = ["*"]
+
+  [runtime.modes.ptc]
+  description = "Standard + إتاحة الأدوات عبر SDK داخل برنامج TypeScript واحد"
+  tools = ["*"]
+  expose_sdk = true
+
+  [runtime.modes.minimal]
+  description = "نمط مبسّط وخفيف للأعمال السريعة — lightweight"
+  tools = ["fs.read", "memory.query", "shell.exec"]
+
+  [runtime.modes.creator]
+  description = "تصميم وكلاء جاهزين وفحص وقت التشغيل — author agents & inspect runtime"
+  tools = ["*"]
+  inspect = true
+
+# ===========================================================================
+#  [[model]] — تعريف النماذج (Model Registry)
+#  العقل (Model) يمكن استبداله. الذاكرة (Memory) تبقى.
+#  The "brain" is swappable. The memory persists.
+# ===========================================================================
+
+[[model]]
+id = "deepseek-chat"
+provider = "deepseek"
+label = "DeepSeek Chat"
+base_url = "https://api.deepseek.com/v1"
+api_key_env = "DEEPSEEK_API_KEY"     # مفتاح API من متغير بيئة — لا يُخزَّن في الملف
+model = "deepseek-chat"
+context_window = 65536
+cost_tier = "low"
+default = true                        # النموذج الافتراضي
+
+[[model]]
+id = "deepseek-reasoner"
+provider = "deepseek"
+label = "DeepSeek Reasoner (R1)"
+base_url = "https://api.deepseek.com/v1"
+api_key_env = "DEEPSEEK_API_KEY"
+model = "deepseek-reasoner"
+context_window = 65536
+cost_tier = "medium"
+
+[[model]]
+id = "claude"
+provider = "anthropic"
+label = "Claude (client-facing / polished)"
+base_url = "https://api.anthropic.com/v1"
+api_key_env = "ANTHROPIC_API_KEY"
+model = "claude-sonnet-4"
+context_window = 200000
+cost_tier = "high"
+
+[[model]]
+id = "gpt"
+provider = "openai"
+label = "OpenAI GPT"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+model = "gpt-4o"
+context_window = 128000
+cost_tier = "high"
+
+[[model]]
+id = "local-ollama"
+provider = "ollama"
+label = "Local model via Ollama (offline / free)"
+base_url = "http://localhost:11434/v1"
+api_key_env = ""                      # لا يحتاج مفتاح — يعمل محلياً
+model = "deepseek-r1:7b"
+context_window = 32768
+cost_tier = "free"
+
+# ===========================================================================
+#  [switching] — سياسة التبديل بين النماذج (Model Switching Policy)
+#  هذا القسم يضمن أن التبديل لا يمس الذاكرة المعرفية إطلاقاً.
+# ===========================================================================
+[switching]
+enabled = true
+# active_model يُحدَّد وقت التشغيل أو عبر CLI (dsh use <id>)؛ هذا الافتراضي.
+active_model = "deepseek-chat"
+
+# قبل التبديل: احفظ حالة الذاكرة (snapshot) حتى لا يُفقد أي سياق معرفي.
+persist_memory_on_switch = true
+# بعد التبديل: أعد حقن الذاكرة المعرفية في نافذة سياق النموذج الجديد.
+rehydrate_memory_on_switch = true
+# احتفظ بسجل أي نموذج اتخذ أي قرار (provenance) — مهم للتدقيق.
+track_provenance = true
+
+  # قواعد اختيار النموذج تلقائياً حسب نوع المهمة (اختياري)
+  [[switching.route]]
+  when = "task.kind == 'client_facing' || task.needs_polish"
+  use = "claude"
+
+  [[switching.route]]
+  when = "task.kind == 'high_volume' || task.cost_sensitive"
+  use = "deepseek-chat"
+
+  [[switching.route]]
+  when = "task.needs_reasoning"
+  use = "deepseek-reasoner"
+
+  [[switching.route]]
+  when = "runtime.local_only && task.offline"
+  use = "local-ollama"
+
+# ===========================================================================
+#  [memory] — الذاكرة المعرفية (THE KNOWLEDGE MEMORY)
+#  ★ هذا هو جوهر الطلب ★
+#  طبقة مستقلة عن النموذج (model-agnostic). لا تُخزَّن داخل أي نموذج،
+#  بل في مخزن ثابت يُقرأ ويُحقن مع كل نموذج مهما بدّلت.
+# ===========================================================================
+[memory]
+enabled = true
+# مخزن الذاكرة على القرص — يبقى ثابتاً عبر جميع النماذج والجلسات.
+store = "file"                         # file | sqlite | vector
+path = "./.smartcrew/memory"
+# تنسيق مستقل عن أي مزوّد نموذج (portable, model-agnostic).
+format = "jsonl"
+
+  # طبقات الذاكرة (Memory Layers)
+  [memory.layers]
+  # 1) المعرفة طويلة الأمد التي تستند إليها القرارات — لا تُمسح عند التبديل.
+  knowledge = true
+  # 2) قرارات النظام السابقة وأسبابها (decision log).
+  decisions = true
+  # 3) سياق الجلسة الحالية (short-term working memory).
+  working = true
+  # 4) حقائق ثابتة عن المشروع/المستخدم (facts / preferences).
+  facts = true
+
+  [memory.retention]
+  knowledge = "permanent"              # دائمة — لا تنتهي
+  decisions = "permanent"
+  working = "session"                  # تُطوى في نهاية الجلسة إلى knowledge
+  facts = "permanent"
+  max_working_tokens = 8000
+
+  # كيف تُحقن الذاكرة في النموذج (بعد أي تبديل) — يضمن استمرارية القرارات
+  [memory.injection]
+  strategy = "summary+retrieve"        # لخّص القديم + استرجع الأوثق صلة
+  top_k = 12                           # أهم 12 عنصراً معرفياً لكل استعلام
+  always_include_facts = true          # الحقائق تُحقن دائماً
+  always_include_recent_decisions = 5  # آخر 5 قرارات تُحقن دائماً
+
+  # التضمين المتجهي (اختياري، لتحسين الاسترجاع) — مستقل عن نموذج التوليد
+  [memory.embedding]
+  enabled = false
+  provider = "local"
+  model = "nomic-embed-text"
+
+# ===========================================================================
+#  [[tool]] — الأدوات (Tools) — Everything is a Plugin
+# ===========================================================================
+[[tool]]
+id = "fs"
+enabled = true
+description = "قراءة/كتابة الملفات ضمن جذر المشروع فقط"
+sandbox_root = "."
+
+[[tool]]
+id = "shell"
+enabled = true
+description = "تنفيذ أوامر الصدفة (مقيّد)"
+allow = ["ls", "cat", "grep", "git", "node", "pnpm", "npm"]
+confirm_destructive = true
+
+[[tool]]
+id = "memory"
+enabled = true
+description = "استعلام/حفظ الذاكرة المعرفية"
+
+[[tool]]
+id = "http"
+enabled = false
+description = "طلبات شبكة صادرة — معطّلة افتراضياً لأن local_only=true"
+
+# ===========================================================================
+#  [integrations] — الربط مع الأدوات الخارجية
+# ===========================================================================
+[integrations]
+
+  [integrations.zapier]
+  enabled = false
+  # طبقة مصادقة موحّدة لإرسال الإيميلات وغيرها
+  auth_layer = true
+  api_key_env = "ZAPIER_API_KEY"
+
+  [integrations.subagents]
+  enabled = true
+  # استدعاء وكلاء فرعية من Codex أو Claude Code
+  providers = ["codex", "claude-code"]
+
+# ===========================================================================
+#  [safety]
+# ===========================================================================
+[safety]
+read_safety_md = true
+require_confirmation_for = ["shell.destructive", "fs.write.outside_root", "http.egress"]
+redact_secrets_in_logs = true
