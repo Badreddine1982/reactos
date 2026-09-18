@@ -1,0 +1,39 @@
+{
+  "name": "@smartcrew/deepseek-harness",
+  "version": "0.1.0",
+  "description": "SMARTCREW DEEPSEEK HARNESS — an open-source agent harness that lets you swap AI models without losing the knowledge memory that system decisions rely on.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "dsh": "./bin/dsh.js"
+  },
+  "scripts": {
+    "start": "node ./bin/dsh.js",
+    "web": "node ./bin/dsh.js web",
+    "chat": "node ./bin/dsh.js chat",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "bin",
+    "src",
+    "smartcrew.config.toml",
+    "SAFETY.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "agent",
+    "harness",
+    "deepseek",
+    "llm",
+    "memory",
+    "model-switching",
+    "plugin",
+    "cordis"
+  ],
+  "author": "SMARTCREW",
+  "dependencies": {}
+}

@@ -1,0 +1,10 @@
+# runtime knowledge memory & snapshots (local state — do not commit)
+.smartcrew/
+# secrets
+.env
+.env.*
+!.env.example
+# node
+node_modules/
+npm-debug.log*
+pnpm-debug.log*
